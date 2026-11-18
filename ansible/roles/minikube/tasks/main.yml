@@ -18,8 +18,10 @@
     dest: /usr/local/bin/minikube
     mode: "0755"
 
+# sg docker : applique le groupe docker immédiatement, même si l'utilisateur
+# vient d'y être ajouté dans cette même exécution.
 - name: Lire l'état du cluster Minikube
-  ansible.builtin.command: minikube status --format '{{ '{{' }}.Host{{ '}}' }}'
+  ansible.builtin.command: sg docker -c "minikube status"
   become: true
   become_user: "{{ minikube_user }}"
   register: minikube_status
@@ -28,24 +30,24 @@
 
 - name: Démarrer Minikube
   ansible.builtin.command: >-
-    minikube start --driver={{ minikube_driver }}
-    --cpus={{ minikube_cpus }} --memory={{ minikube_memory }}
+    sg docker -c "minikube start --driver={{ minikube_driver }}
+    --cpus={{ minikube_cpus }} --memory={{ minikube_memory }}"
   become: true
   become_user: "{{ minikube_user }}"
-  when: "'Running' not in minikube_status.stdout"
+  when: minikube_status.rc != 0
   changed_when: true
 
-- name: Lister les addons activés
-  ansible.builtin.command: minikube addons list -o json
+- name: Lister les addons
+  ansible.builtin.command: sg docker -c "minikube addons list -o json"
   become: true
   become_user: "{{ minikube_user }}"
   register: minikube_addons_list
   changed_when: false
 
 - name: Activer les addons
-  ansible.builtin.command: "minikube addons enable {{ item }}"
+  ansible.builtin.command: sg docker -c "minikube addons enable {{ item }}"
   become: true
   become_user: "{{ minikube_user }}"
   loop: "{{ minikube_addons }}"
-  when: (minikube_addons_list.stdout | from_json)[item].status != 'enabled'
+  when: (minikube_addons_list.stdout | from_json)[item].Status != 'enabled'
   changed_when: true
