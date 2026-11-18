@@ -1,0 +1,187 @@
+---
+# Lot 3 : déploiement de Legeni WebApp dans Kubernetes.
+#
+#   ansible-playbook deploy.yml -e target_env=staging -e image_tag=1.0.8
+#
+# Enchaînement : namespace + Secret + Redis -> Deployment webapp -> attente du
+# rolling update -> smoke test (version servie == version attendue).
+# En cas d'échec après modification du Deployment : rollback automatique vers
+# la révision précédente (block/rescue), puis le playbook échoue quand même
+# pour que Jenkins affiche le build en rouge.
+- name: Déployer Legeni WebApp dans Kubernetes
+  hosts: local
+  gather_facts: false
+
+  vars:
+    # Version attendue dans /api/info (APP_VERSION injectée au build de l'image).
+    expected_version: "{{ image_tag }}"
+    rollout_retries: 30   # x rollout_delay = 150 s maximum
+    rollout_delay: 5
+    smoke_requests: 6     # plusieurs requêtes pour passer par plusieurs pods
+
+  pre_tasks:
+    - name: Vérifier les paramètres
+      ansible.builtin.assert:
+        that:
+          - target_env is defined
+          - target_env in ['staging', 'prod']
+          - image_tag is defined
+          - image_tag != 'latest'
+          - image_tag is match('^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$')
+        fail_msg: >-
+          Usage : -e target_env=staging|prod -e image_tag=<version>
+          (ex. 1.0.8 ou 1.1.0-37 ; "latest" est interdit)
+        quiet: true
+
+    # Chargés après l'assert pour un message clair si target_env manque.
+    # -e reste prioritaire sur ces fichiers.
+    - name: Charger les variables communes, le coffre et l'environnement
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/vars/{{ item }}"
+      loop:
+        - common.yml
+        - vault.yml
+        - "{{ target_env }}.yml"
+
+  tasks:
+    # ---------- Socle : namespace, Secret, Redis ----------
+    - name: Appliquer le socle (namespace, Secret, Redis)
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        template: "{{ playbook_dir }}/templates/k8s/{{ item }}.yml.j2"
+      loop:
+        - namespace
+        - redis-secret
+        - redis
+      no_log: "{{ item == 'redis-secret' }}"
+
+    - name: Attendre que Redis soit prêt
+      kubernetes.core.k8s_info:
+        kind: StatefulSet
+        name: redis
+        namespace: "{{ k8s_namespace }}"
+      register: redis_sts
+      until: >-
+        redis_sts.resources | length > 0
+        and (redis_sts.resources[0].status.readyReplicas | default(0)) == redis_sts.resources[0].spec.replicas
+      retries: 24
+      delay: 5
+
+    # ---------- Application ----------
+    - name: Lire le Deployment webapp avant la mise à jour
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: webapp
+        namespace: "{{ k8s_namespace }}"
+      register: webapp_before
+
+    - name: Mémoriser la révision et l'image en cours
+      ansible.builtin.set_fact:
+        revision_before: >-
+          {{ webapp_before.resources[0].metadata.annotations['deployment.kubernetes.io/revision'] | default('0')
+             if webapp_before.resources | length > 0 else '0' }}
+        image_before: >-
+          {{ webapp_before.resources[0].spec.template.spec.containers[0].image
+             if webapp_before.resources | length > 0 else 'aucune' }}
+
+    - name: Déployer, vérifier, ou revenir en arrière
+      block:
+        - name: Appliquer le Deployment et le Service webapp
+          kubernetes.core.k8s:
+            state: present
+            apply: true
+            template: "{{ playbook_dir }}/templates/k8s/webapp.yml.j2"
+
+        - name: Attendre la fin du rolling update
+          ansible.builtin.include_tasks: tasks/wait_rollout.yml
+
+        # ----- Smoke test : on passe par le Service (NodePort), comme un client -----
+        - name: Lire l'adresse du nœud Kubernetes
+          kubernetes.core.k8s_info:
+            kind: Node
+          register: k8s_nodes
+
+        - name: Construire l'URL du smoke test
+          ansible.builtin.set_fact:
+            smoke_url: >-
+              http://{{ (k8s_nodes.resources[0].status.addresses
+                         | selectattr('type', 'equalto', 'InternalIP') | first).address }}:{{ app_node_port }}
+
+        - name: Smoke test - /ready répond 200 (application + Redis)
+          ansible.builtin.uri:
+            url: "{{ smoke_url }}/ready"
+            status_code: 200
+          register: smoke_ready
+          until: smoke_ready.status == 200
+          retries: 10
+          delay: 3
+
+        - name: Smoke test - interroger /api/info plusieurs fois
+          ansible.builtin.uri:
+            url: "{{ smoke_url }}/api/info"
+            return_content: true
+          register: smoke_info
+          loop: "{{ range(smoke_requests) | list }}"
+          loop_control:
+            label: "requête {{ item + 1 }}"
+
+        - name: Smoke test - la version et l'environnement servis sont les bons
+          ansible.builtin.assert:
+            that:
+              - smoke_info.results | map(attribute='json.version') | unique | list == [expected_version]
+              - smoke_info.results | map(attribute='json.env') | unique | list == [app_env]
+            fail_msg: >-
+              Versions servies : {{ smoke_info.results | map(attribute='json.version') | unique | list }},
+              attendue : {{ expected_version }} ;
+              environnements : {{ smoke_info.results | map(attribute='json.env') | unique | list }},
+              attendu : {{ app_env }}
+            success_msg: >-
+              {{ smoke_requests }} réponses en version {{ expected_version }}
+              ({{ smoke_info.results | map(attribute='json.hostname') | unique | length }} pods distincts)
+
+      rescue:
+        - name: Lire la révision après l'échec
+          kubernetes.core.k8s_info:
+            kind: Deployment
+            name: webapp
+            namespace: "{{ k8s_namespace }}"
+          register: webapp_after
+
+        - name: Mémoriser la révision après l'échec
+          ansible.builtin.set_fact:
+            revision_after: >-
+              {{ webapp_after.resources[0].metadata.annotations['deployment.kubernetes.io/revision'] | default('0')
+                 if webapp_after.resources | length > 0 else '0' }}
+
+        # Rollback uniquement si une nouvelle révision a été créée et qu'il en
+        # existe une précédente (pas de rollback possible au tout premier déploiement).
+        - name: Rollback automatique vers la révision précédente
+          kubernetes.core.k8s_rollback:
+            api_version: apps/v1
+            kind: Deployment
+            name: webapp
+            namespace: "{{ k8s_namespace }}"
+          when:
+            - revision_before | int > 0
+            - revision_after | int > revision_before | int
+          register: webapp_rollback
+
+        - name: Attendre la fin du rollback
+          ansible.builtin.include_tasks: tasks/wait_rollout.yml
+          when: webapp_rollback is changed
+
+        - name: Signaler l'échec du déploiement
+          ansible.builtin.fail:
+            msg: >-
+              Échec du déploiement de {{ app_image }}:{{ image_tag }} en {{ target_env }}
+              à l'étape « {{ ansible_failed_task.name }} ».
+              {{ 'Rollback effectué : ' ~ image_before ~ ' est de nouveau en service.'
+                 if webapp_rollback is changed
+                 else 'Aucun rollback (premier déploiement ou Deployment inchangé).' }}
+
+    - name: Résumé
+      ansible.builtin.debug:
+        msg: >-
+          {{ target_env }} : {{ app_image }}:{{ image_tag }} déployée
+          ({{ app_replicas }} réplicas) - {{ smoke_url }}

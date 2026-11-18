@@ -1,0 +1,21 @@
+---
+# Attend la fin du rolling update du Deployment webapp, comme "kubectl rollout status" :
+# - le contrôleur a pris en compte la dernière modification (observedGeneration),
+# - tous les pods sont à la nouvelle version (updatedReplicas),
+# - ils sont tous disponibles (availableReplicas, readinessProbe + minReadySeconds),
+# - les anciens pods ont disparu (replicas).
+# Échoue au bout de rollout_retries x rollout_delay secondes.
+- name: Attendre la fin du rolling update de webapp
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    name: webapp
+    namespace: "{{ k8s_namespace }}"
+  register: webapp_rollout
+  until: >-
+    webapp_rollout.resources | length > 0
+    and (webapp_rollout.resources[0].status.observedGeneration | default(0)) >= webapp_rollout.resources[0].metadata.generation
+    and (webapp_rollout.resources[0].status.updatedReplicas | default(0)) == webapp_rollout.resources[0].spec.replicas
+    and (webapp_rollout.resources[0].status.availableReplicas | default(0)) == webapp_rollout.resources[0].spec.replicas
+    and (webapp_rollout.resources[0].status.replicas | default(0)) == webapp_rollout.resources[0].spec.replicas
+  retries: "{{ rollout_retries }}"
+  delay: "{{ rollout_delay }}"
