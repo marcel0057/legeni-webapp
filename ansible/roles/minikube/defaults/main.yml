@@ -6,6 +6,8 @@ minikube_kubectl_version_url: https://dl.k8s.io/release/stable.txt
 minikube_driver: docker
 minikube_cpus: 2
 minikube_memory: 4096
+minikube_python_packages:
+  - python3-kubernetes
 minikube_addons:
   - metrics-server
   - ingress

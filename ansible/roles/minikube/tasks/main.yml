@@ -12,6 +12,15 @@
     dest: /usr/local/bin/kubectl
     mode: "0755"
 
+# Requis par le module kubernetes.core.k8s utilisé dans deploy.yml.
+# Paquet apt plutôt que pip : Ubuntu 24.04 interdit pip sur le Python système (PEP 668).
+- name: Installer la bibliothèque Python kubernetes
+  ansible.builtin.apt:
+    name: "{{ minikube_python_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
 - name: Installer minikube
   ansible.builtin.get_url:
     url: "{{ minikube_url }}"
