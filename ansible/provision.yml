@@ -1,0 +1,6 @@
+---
+- name: Provisionner la machine de la chaîne CI/CD
+  hosts: local
+  become: true
+  roles:
+    - docker
