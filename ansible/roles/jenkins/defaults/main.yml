@@ -2,7 +2,7 @@
 jenkins_dir: /opt/jenkins
 jenkins_image: legeni-jenkins:lts
 jenkins_container_name: jenkins
-jenkins_http_port: 8082
-jenkins_agent_port: 50000
+jenkins_http_port: 8083
+jenkins_agent_port: 50001
 jenkins_network: devops-net
 jenkins_tp_label: "Projet final DevOps"
