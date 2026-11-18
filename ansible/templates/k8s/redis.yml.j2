@@ -1,0 +1,88 @@
+# Redis : StatefulSet à 1 réplica avec volume persistant (PVC par réplica)
+# et Service "headless" qui donne au pod un nom DNS stable : redis-0.redis.
+# L'application s'y connecte avec REDIS_HOST=redis.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: legeni-webapp
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: legeni-webapp
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/part-of: legeni-webapp
+    spec:
+      containers:
+        - name: redis
+          image: {{ redis_image }}
+          # $(REDIS_PASSWORD) est remplacé par Kubernetes à partir de la variable d'env.
+          args: ["--appendonly", "yes", "--requirepass", "$(REDIS_PASSWORD)"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+            # Lu par redis-cli : les sondes s'authentifient sans mot de passe en clair.
+            - name: REDISCLI_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: {{ redis_cpu_request }}
+              memory: {{ redis_memory_request }}
+            limits:
+              cpu: {{ redis_cpu_limit }}
+              memory: {{ redis_memory_limit }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ redis_storage_size }}
