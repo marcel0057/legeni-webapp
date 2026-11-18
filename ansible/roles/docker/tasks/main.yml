@@ -1,7 +1,7 @@
 ---
 - name: Installer les prérequis
   ansible.builtin.apt:
-    name: [ca-certificates, curl, gnupg]
+    name: [ca-certificates, curl, gnupg, python3-docker]
     state: present
     update_cache: true
     cache_valid_time: 3600

@@ -1,0 +1,37 @@
+---
+- name: Lire le groupe propriétaire du socket Docker
+  ansible.builtin.stat:
+    path: /var/run/docker.sock
+  register: jenkins_docker_sock
+
+- name: Mémoriser le GID du groupe Docker
+  ansible.builtin.set_fact:
+    jenkins_docker_gid: "{{ jenkins_docker_sock.stat.gid }}"
+
+- name: Créer le dossier de travail de Jenkins
+  ansible.builtin.file:
+    path: "{{ jenkins_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Copier le Dockerfile de Jenkins
+  ansible.builtin.copy:
+    src: Dockerfile
+    dest: "{{ jenkins_dir }}/Dockerfile"
+    mode: "0644"
+
+- name: Générer le docker-compose.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ jenkins_dir }}/docker-compose.yml"
+    mode: "0644"
+
+- name: Créer le réseau Docker commun
+  community.docker.docker_network:
+    name: "{{ jenkins_network }}"
+    state: present
+
+- name: Construire et démarrer Jenkins
+  community.docker.docker_compose_v2:
+    project_src: "{{ jenkins_dir }}"
+    state: present
