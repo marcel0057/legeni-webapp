@@ -1,0 +1,11 @@
+---
+# Paramètres de l'environnement staging (mêmes manifests que la prod).
+k8s_namespace: legeni-staging
+app_env: staging
+app_replicas: 2
+app_node_port: 30080
+# Couleur forcée en staging pour distinguer les environnements d'un coup d'œil.
+app_color: "#d29922"
+
+redis_password: "{{ vault_redis_password_staging }}"
+redis_storage_size: 256Mi

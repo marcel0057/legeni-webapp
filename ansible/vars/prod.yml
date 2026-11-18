@@ -1,0 +1,11 @@
+---
+# Paramètres de l'environnement prod (mêmes manifests que le staging).
+k8s_namespace: legeni-prod
+app_env: prod
+app_replicas: 3
+app_node_port: 30081
+# Pas de app_color en prod : la couleur par défaut du code (app.py) s'applique,
+# ce qui permet de la voir changer au scénario 1 de la soutenance.
+
+redis_password: "{{ vault_redis_password_prod }}"
+redis_storage_size: 1Gi

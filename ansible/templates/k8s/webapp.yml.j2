@@ -1,0 +1,121 @@
+# Application Legeni WebApp : Deployment (rolling update sans coupure) + Service NodePort.
+# image_tag est obligatoire (passé par deploy.yml / Jenkins) : jamais "latest".
+# APP_VERSION n'est pas surchargée ici : elle vient de l'image (--build-arg au build),
+# ce qui permet au smoke test de vérifier que c'est bien la bonne image qui tourne.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: webapp
+    app.kubernetes.io/part-of: legeni-webapp
+  annotations:
+    # Visible dans "kubectl rollout history".
+    kubernetes.io/change-cause: "deploy {{ app_image }}:{{ image_tag }}"
+spec:
+  replicas: {{ app_replicas }}
+  revisionHistoryLimit: 5
+  # Un pod doit rester prêt 5 s avant d'être compté comme disponible.
+  minReadySeconds: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: webapp
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # jamais moins de pods prêts que demandé
+      maxSurge: 1         # un pod neuf à la fois
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: webapp
+        app.kubernetes.io/part-of: legeni-webapp
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webapp
+          image: {{ app_image }}:{{ image_tag }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+          env:
+            - name: APP_ENV
+              value: "{{ app_env }}"
+{% if app_color is defined %}
+            - name: APP_COLOR
+              value: "{{ app_color }}"
+{% endif %}
+            - name: REDIS_HOST
+              value: redis
+            - name: REDIS_PORT
+              value: "6379"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+          readinessProbe:
+            httpGet:
+              path: {{ app_readiness_path }}
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          # Laisse le temps au Service de retirer le pod de ses endpoints
+          # avant l'arrêt de gunicorn : aucune requête perdue pendant le rolling update.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            requests:
+              cpu: {{ app_cpu_request }}
+              memory: {{ app_memory_request }}
+            limits:
+              cpu: {{ app_cpu_limit }}
+              memory: {{ app_memory_limit }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # gunicorn a besoin d'un /tmp inscriptible (système de fichiers en lecture seule).
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: webapp
+    app.kubernetes.io/part-of: legeni-webapp
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: webapp
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      nodePort: {{ app_node_port }}

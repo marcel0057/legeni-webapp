@@ -1,0 +1,17 @@
+---
+# Valeurs communes à tous les environnements.
+# vars/<env>.yml peut les surcharger (chargé après ce fichier).
+app_image: theownghost/legeni-webapp
+app_cpu_request: 50m
+app_memory_request: 96Mi
+app_cpu_limit: 500m
+app_memory_limit: 256Mi
+# Surchargeable pour simuler un déploiement raté (scénario 3) :
+#   -e app_readiness_path=/inexistant
+app_readiness_path: /ready
+
+redis_image: redis:7.4-alpine
+redis_cpu_request: 50m
+redis_memory_request: 64Mi
+redis_cpu_limit: 250m
+redis_memory_limit: 256Mi
