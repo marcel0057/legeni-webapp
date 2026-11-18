@@ -1,0 +1,11 @@
+---
+minikube_user: "{{ lookup('env', 'SUDO_USER') | default(lookup('env', 'USER'), true) }}"
+minikube_arch: "{{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }}"
+minikube_url: "https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-{{ minikube_arch }}"
+minikube_kubectl_version_url: https://dl.k8s.io/release/stable.txt
+minikube_driver: docker
+minikube_cpus: 2
+minikube_memory: 4096
+minikube_addons:
+  - metrics-server
+  - ingress
